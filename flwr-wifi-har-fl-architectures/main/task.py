@@ -1,5 +1,3 @@
-"""pytorchexample: A Flower / PyTorch app."""
-
 import os
 
 import torch
@@ -20,30 +18,44 @@ class CNNModel(nn.Module):
     def __init__(self, num_classes=7):
         super().__init__()
 
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
-        self.relu1 = nn.ReLU()
-        self.pool1 = nn.MaxPool2d(2)
+        self.conv_block1 = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            # nn.Dropout(0.4)
+        )
 
-        self.conv2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
-        self.relu2 = nn.ReLU()
-        self.pool2 = nn.MaxPool2d(2)
+        self.conv_block2 = nn.Sequential(
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            # nn.Dropout(0.4)
+        )
 
-        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.relu3 = nn.ReLU()
-        self.pool3 = nn.MaxPool2d(2)
+        self.conv_block3 = nn.Sequential(
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            # nn.Dropout(0.4)
+        )
 
-        self.flatten = nn.Flatten()
-        self.fc1 = nn.Linear(64 * 31 * 11, 128)
-        self.relu4 = nn.ReLU()
-        self.fc2 = nn.Linear(128, num_classes)
+        # Fully connected layers
+        self.fc = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(128*31*11, 256),
+            nn.ReLU(),
+            # nn.Dropout(0.4),
+            nn.Linear(256, num_classes)
+        )
 
     def forward(self, x):
-        x = self.pool1(self.relu1(self.conv1(x)))
-        x = self.pool2(self.relu2(self.conv2(x)))
-        x = self.pool3(self.relu3(self.conv3(x)))
-        x = self.flatten(x)
-        x = self.relu4(self.fc1(x))
-        x = self.fc2(x)
+        x = self.conv_block1(x)
+        x = self.conv_block2(x)
+        x = self.conv_block3(x)
+        x = self.fc(x)
         return x
 
 # Define a ResNet50 model
@@ -102,7 +114,8 @@ def load_UT_HAR(root_dir):
             continue
         data = np.load(path, allow_pickle=True)
         data = data.reshape(len(data), 1, 250, 90)
-        data = (data - data.min()) / (data.max() - data.min())
+        eps = 1e-8
+        data = (data - data.min()) / (data.max() - data.min() + eps)
         wifi[key] = torch.tensor(data, dtype=torch.float32)
 
     for path in label_files:
@@ -113,7 +126,7 @@ def load_UT_HAR(root_dir):
         wifi[key] = torch.tensor(labels, dtype=torch.int64)
         
     # Exapnd the training set with data augmentation
-    # wifi['X_train'], wifi['y_train'] = augment_dataset(wifi['X_train'], wifi['y_train'], factor=3)
+    # wifi['X_train'], wifi['y_train'] = augment_dataset(wifi['X_train'], wifi['y_train'], factor=1)
 
     return wifi
 
@@ -122,18 +135,21 @@ har_data = None
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, '..', 'UT_HAR')
 
-def load_data():
+def load_data(batch_size=64):
     wifi = load_UT_HAR(DATA_DIR)
 
     X_train, y_train = wifi['X_train'], wifi['y_train']
+    X_val, y_val = wifi['X_val'], wifi['y_val']
     X_test, y_test = wifi['X_test'], wifi['y_test']
 
     train_dataset = TensorDataset(X_train, y_train)
+    val_dataset = TensorDataset(X_val, y_val)
     test_dataset = TensorDataset(X_test, y_test)
-    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
-    
-    return train_loader, test_loader
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    return train_loader, val_loader, test_loader
 
 def load_partitioned_data(partition_id: int, num_partitions: int, batch_size: int):
     global har_data, partitioner
@@ -186,6 +202,7 @@ def train(net, trainloader, device, epochs=3, lr=1e-3):
     optimizer = torch.optim.Adam(net.parameters(), lr=lr)
 
     net.train()
+    print("Starting training...")
 
     for epoch in range(epochs):
         total_loss = 0.0
