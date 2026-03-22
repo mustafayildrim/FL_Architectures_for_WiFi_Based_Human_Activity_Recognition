@@ -21,8 +21,8 @@ packages = ["."]
 publisher = "flwrlabs"
 
 [tool.flwr.app.components]
-serverapp = "pytorchexample.server_app:app"
-clientapp = "pytorchexample.client_app:app"
+serverapp = "main.server_app:app"
+clientapp = "main.client_app:app"
 
 
 [tool.flwr.app.config]
@@ -31,3 +31,4 @@ fraction-evaluate = 0.5
 local-epochs = 5
 learning-rate = 1e-3
 batch-size = 64
+model = "cnn"  # Options: "cnn", "resnet50", "densenet"

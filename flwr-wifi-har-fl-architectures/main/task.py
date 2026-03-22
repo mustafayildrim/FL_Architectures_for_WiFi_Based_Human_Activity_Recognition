@@ -1,5 +1,4 @@
 import os
-
 import torch
 import glob
 import numpy as np
@@ -131,16 +130,17 @@ def load_UT_HAR(root_dir):
     return wifi
 
 # Global cache for the har data
-har_data = None
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, '..', 'UT_HAR')
+fds = None  # Cache FederatedDataset
+DATA_DIR = os.path.join(os.getcwd(), "UT_HAR")
+har_data = None  # Cache for the loaded dataset
 
 def load_data(batch_size=64):
-    wifi = load_UT_HAR(DATA_DIR)
-
-    X_train, y_train = wifi['X_train'], wifi['y_train']
-    X_val, y_val = wifi['X_val'], wifi['y_val']
-    X_test, y_test = wifi['X_test'], wifi['y_test']
+    global har_data
+    if har_data is None:
+        har_data = load_UT_HAR(DATA_DIR)
+    X_train, y_train = har_data['X_train'], har_data['y_train']
+    X_val, y_val = har_data['X_val'], har_data['y_val']
+    X_test, y_test = har_data['X_test'], har_data['y_test']
 
     train_dataset = TensorDataset(X_train, y_train)
     val_dataset = TensorDataset(X_val, y_val)
@@ -152,48 +152,39 @@ def load_data(batch_size=64):
     return train_loader, val_loader, test_loader
 
 def load_partitioned_data(partition_id: int, num_partitions: int, batch_size: int):
-    global har_data, partitioner
-
+    global fds
+    global har_data
+    
     if har_data is None:
         har_data = load_UT_HAR(DATA_DIR)
-
-        hf_dataset = Dataset.from_dict({
-            "image": har_data["X_train"].numpy(),
-            "label": har_data["y_train"].numpy()
-        })
-
+    
+    # Create a Hugging Face dataset from the training data
+    hf_dataset = Dataset.from_dict({
+        "image": har_data["X_train"].numpy(),
+        "label": har_data["y_train"].numpy()
+    })
+    
+    if fds is None:
         partitioner = IidPartitioner(num_partitions=num_partitions)
-        partitioner.dataset = hf_dataset
-
-    # Load client partition
-    client_data = partitioner.load_partition(partition_id)
-
-    # Convert to torch
-    X = torch.tensor(client_data["image"], dtype=torch.float32)
-    y = torch.tensor(client_data["label"], dtype=torch.int64).squeeze()
-
-    train_dataset = TensorDataset(X, y)
-    test_dataset = TensorDataset(
-        har_data["X_test"], har_data["y_test"].squeeze()
-    )
-
-    trainloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    testloader = DataLoader(test_dataset, batch_size=batch_size)
-
+        fds = FederatedDataset(
+            dataset=hf_dataset,
+            partitioners={"train": partitioner},
+        )
+    
+    partition = fds.load_partition(partition_id)
+    # Divide data on each node: 80% train, 20% test
+    partition_train_test = partition.train_test_split(test_size=0.2, seed=42)
+    trainloader = DataLoader(partition_train_test["train"], batch_size=batch_size, shuffle=True)
+    testloader = DataLoader(partition_train_test["test"], batch_size=batch_size, shuffle=False)
     return trainloader, testloader
 
 
 def load_centralized_dataset(batch_size=128):
     global har_data
-
     if har_data is None:
         har_data = load_UT_HAR(DATA_DIR)
-
-    test_dataset = TensorDataset(
-        har_data["X_test"], har_data["y_test"].squeeze()
-    )
-
-    return DataLoader(test_dataset, batch_size=batch_size)
+    dataset = TensorDataset(har_data['X_test'], har_data['y_test'])
+    return DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
 
 def train(net, trainloader, device, epochs=3, lr=1e-3):

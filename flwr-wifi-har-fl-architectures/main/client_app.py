@@ -2,20 +2,26 @@ import torch
 from flwr.app import ArrayRecord, Context, Message, MetricRecord, RecordDict
 from flwr.clientapp import ClientApp
 
-from main.task import load_data, CNNModel, ResNet50Model, DenseNetModel
+from main.task import load_partitioned_data
+from main.task import CNNModel, ResNet50Model, DenseNetModel
 from main.task import test as test_fn
 from main.task import train as train_fn
 
 # Flower ClientApp
 app = ClientApp()
 
+MODEL_DICT = {
+    "cnn": CNNModel,
+    "resnet50": ResNet50Model,
+    "densenet": DenseNetModel,
+}
 
 @app.train()
-def train(msg: Message, context: Context, cnn_model: torch.nn.Module):
+def train(msg: Message, context: Context):
     """Train the model on local data."""
 
     # Load the model and initialize it with the received weights
-    model = cnn_model
+    model = MODEL_DICT[context.run_config["model"]](num_classes=7)
     model.load_state_dict(msg.content["arrays"].to_torch_state_dict())
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -24,10 +30,10 @@ def train(msg: Message, context: Context, cnn_model: torch.nn.Module):
     partition_id = context.node_config["partition-id"]
     num_partitions = context.node_config["num-partitions"]
     batch_size = context.run_config["batch-size"]
-    trainloader, _ = load_data(partition_id, num_partitions, batch_size)
+    trainloader, _ = load_partitioned_data(partition_id, num_partitions, batch_size)
 
     # Call the training function
-    train_loss = train_fn(
+    train_loss, train_acc = train_fn(
         model,
         trainloader,
         context.run_config["local-epochs"],
@@ -39,6 +45,7 @@ def train(msg: Message, context: Context, cnn_model: torch.nn.Module):
     model_record = ArrayRecord(model.state_dict())
     metrics = {
         "train_loss": train_loss,
+        "train_acc": train_acc,
         "num-examples": len(trainloader.dataset),
     }
     metric_record = MetricRecord(metrics)
@@ -47,11 +54,11 @@ def train(msg: Message, context: Context, cnn_model: torch.nn.Module):
 
 
 @app.evaluate()
-def evaluate(msg: Message, context: Context, cnn_model: torch.nn.Module):
+def evaluate(msg: Message, context: Context):
     """Evaluate the model on local data."""
 
     # Load the model and initialize it with the received weights
-    model = cnn_model
+    model = MODEL_DICT[context.run_config["model"]](num_classes=7)
     model.load_state_dict(msg.content["arrays"].to_torch_state_dict())
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -60,7 +67,7 @@ def evaluate(msg: Message, context: Context, cnn_model: torch.nn.Module):
     partition_id = context.node_config["partition-id"]
     num_partitions = context.node_config["num-partitions"]
     batch_size = context.run_config["batch-size"]
-    _, valloader = load_data(partition_id, num_partitions, batch_size)
+    _, valloader = load_partitioned_data(partition_id, num_partitions, batch_size)
 
     # Call the evaluation function
     eval_loss, eval_acc = test_fn(

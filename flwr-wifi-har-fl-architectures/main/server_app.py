@@ -1,16 +1,29 @@
+import argparse
+
 import torch
 from flwr.app import ArrayRecord, ConfigRecord, Context, MetricRecord
 from flwr.serverapp import Grid, ServerApp
 from flwr.serverapp.strategy import FedAvg
 
-from main.task import CNNModel, ResNet50Model, DenseNetModel, load_centralized_dataset, test
+from main.task import load_centralized_dataset, test
+from main.task import CNNModel, ResNet50Model, DenseNetModel
+
 
 # Create ServerApp
 app = ServerApp()
 
+MODEL_DICT = {
+    "cnn": CNNModel,
+    "resnet50": ResNet50Model,
+    "densenet": DenseNetModel,
+}
+
+def compute_model_size_bytes(arrays: ArrayRecord) -> int:
+    """Compute the model size in bytes."""
+    return sum(t.numel() * t.element_size() for t in arrays.to_torch_state_dict().values())
 
 @app.main()
-def main(grid: Grid, context: Context, cnn_model: torch.nn.Module) -> None:
+def main(grid: Grid, context: Context) -> None:
     """Main entry point for the ServerApp."""
 
     # Read run config
@@ -19,11 +32,21 @@ def main(grid: Grid, context: Context, cnn_model: torch.nn.Module) -> None:
     lr: float = context.run_config["learning-rate"]
 
     # Load global model
-    global_model = cnn_model
+    global_model = MODEL_DICT[context.run_config["model"]](num_classes=7)
     arrays = ArrayRecord(global_model.state_dict())
 
     # Initialize FedAvg strategy
     strategy = FedAvg(fraction_evaluate=fraction_evaluate)
+    
+    #Compute communication overhead per round
+    num_clients = len(grid.get_node_ids())
+    model_size = compute_model_size_bytes(arrays)
+    comm_per_round = 2 * num_clients * model_size
+    total_comm = comm_per_round * num_rounds
+    print(f"Model size: {model_size/1e6:.2f} MB")
+    print(f"Clients: {num_clients}")
+    print(f"Communication per round: {comm_per_round/1e6:.2f} MB")
+    print(f"Total communication for {num_rounds} rounds: {total_comm/1e6:.2f} MB\n")
 
     # Start strategy, run FedAvg for `num_rounds`
     result = strategy.start(
@@ -31,7 +54,7 @@ def main(grid: Grid, context: Context, cnn_model: torch.nn.Module) -> None:
         initial_arrays=arrays,
         train_config=ConfigRecord({"lr": lr}),
         num_rounds=num_rounds,
-        evaluate_fn=global_evaluate,
+        evaluate_fn=lambda rnd, arr: global_evaluate(rnd, arr, global_model),
     )
 
     # Save final model to disk
@@ -40,11 +63,10 @@ def main(grid: Grid, context: Context, cnn_model: torch.nn.Module) -> None:
     torch.save(state_dict, "final_model.pt")
 
 
-def global_evaluate(server_round: int, arrays: ArrayRecord, cnn_model: torch.nn.Module) -> MetricRecord:
+def global_evaluate(server_round: int, arrays: ArrayRecord, model: torch.nn.Module) -> MetricRecord:
     """Evaluate model on central data."""
 
     # Load the model and initialize it with the received weights
-    model = cnn_model
     model.load_state_dict(arrays.to_torch_state_dict())
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model.to(device)
