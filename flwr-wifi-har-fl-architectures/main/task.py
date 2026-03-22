@@ -101,43 +101,33 @@ def augment_dataset(X, y, factor=2):
     return torch.cat(X_list, dim=0), torch.cat(y_list, dim=0)
 
 # Load the UT-HAR dataset, which is already partitioned into train/val/test sets
-def load_UT_HAR(root_dir):
-    data_files = glob.glob(root_dir + '/data/*.csv')
-    label_files = glob.glob(root_dir + '/label/*.csv')
-    expected = ['X_train', 'X_val', 'X_test', 'y_train', 'y_val', 'y_test']
-    wifi = {}
-
-    for path in data_files:
-        key = path.replace('\\', '/').split('/')[-1].split('.')[0]
-        if key not in expected:
-            continue
-        data = np.load(path, allow_pickle=True)
-        data = data.reshape(len(data), 1, 250, 90)
-        eps = 1e-8
-        data = (data - data.min()) / (data.max() - data.min() + eps)
-        wifi[key] = torch.tensor(data, dtype=torch.float32)
-
-    for path in label_files:
-        key = path.replace('\\', '/').split('/')[-1].split('.')[0]
-        if key not in expected:
-            continue
-        labels = np.load(path, allow_pickle=True)
-        wifi[key] = torch.tensor(labels, dtype=torch.int64)
-        
-    # Exapnd the training set with data augmentation
-    # wifi['X_train'], wifi['y_train'] = augment_dataset(wifi['X_train'], wifi['y_train'], factor=1)
-
-    return wifi
+abs_path = "C:\\Users\\katyc\\Documents\\GitHub\\FL_Architectures_for_WiFi_Based_Human_Activity_Recognition\\flwr-wifi-har-fl-architectures\\UT_HAR"
+def load_UT_HAR(root_dir=abs_path):
+    expected = ["X_train", "X_val", "X_test", "y_train", "y_val", "y_test"]
+    data = {}
+    for folder in ["data", "label"]:
+        files = glob.glob(os.path.join(root_dir, folder, "*.csv"))
+        for path in files:
+            key = os.path.basename(path).split(".")[0]
+            if key not in expected:
+                continue
+            arr = np.load(path, allow_pickle=True)
+            if folder == "data":
+                arr = arr.reshape(len(arr), 1, 250, 90)
+                arr = (arr - arr.min()) / (arr.max() - arr.min() + 1e-8)
+                arr = torch.tensor(arr, dtype=torch.float32)
+            else:
+                arr = torch.tensor(arr, dtype=torch.long)
+            data[key] = arr
+    X_train, y_train = augment_dataset(data["X_train"], data["y_train"], factor=0)  # factor=0 means no extra copies
+    data["X_train"], data["y_train"] = X_train, y_train
+    return data
 
 # Global cache for the har data
 fds = None  # Cache FederatedDataset
-DATA_DIR = os.path.join(os.getcwd(), "UT_HAR")
-har_data = None  # Cache for the loaded dataset
 
-def load_data(batch_size=64):
-    global har_data
-    if har_data is None:
-        har_data = load_UT_HAR(DATA_DIR)
+def load_data(batch_size=64, root_dir=abs_path):
+    har_data = load_UT_HAR(root_dir)
     X_train, y_train = har_data['X_train'], har_data['y_train']
     X_val, y_val = har_data['X_val'], har_data['y_val']
     X_test, y_test = har_data['X_test'], har_data['y_test']
@@ -145,49 +135,48 @@ def load_data(batch_size=64):
     train_dataset = TensorDataset(X_train, y_train)
     val_dataset = TensorDataset(X_val, y_val)
     test_dataset = TensorDataset(X_test, y_test)
+    
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     return train_loader, val_loader, test_loader
 
-def load_partitioned_data(partition_id: int, num_partitions: int, batch_size: int):
-    global fds
-    global har_data
+def load_partitioned_data(partition_id: int, num_partitions: int, batch_size: int, root_dir=abs_path):
+    har_data = load_UT_HAR(root_dir)
+
+    X = har_data["X_train"]
+    y = har_data["y_train"]
     
-    if har_data is None:
-        har_data = load_UT_HAR(DATA_DIR)
-    
-    # Create a Hugging Face dataset from the training data
-    hf_dataset = Dataset.from_dict({
-        "image": har_data["X_train"].numpy(),
-        "label": har_data["y_train"].numpy()
-    })
-    
-    if fds is None:
-        partitioner = IidPartitioner(num_partitions=num_partitions)
-        fds = FederatedDataset(
-            dataset=hf_dataset,
-            partitioners={"train": partitioner},
-        )
-    
-    partition = fds.load_partition(partition_id)
-    # Divide data on each node: 80% train, 20% test
-    partition_train_test = partition.train_test_split(test_size=0.2, seed=42)
-    trainloader = DataLoader(partition_train_test["train"], batch_size=batch_size, shuffle=True)
-    testloader = DataLoader(partition_train_test["test"], batch_size=batch_size, shuffle=False)
+    # Shuffle the data before partitioning (IID federated learning)
+    n = len(X)
+    perm = torch.randperm(n)
+    X = X[perm]
+    y = y[perm]
+
+    part_size = n // num_partitions
+
+    start = partition_id * part_size
+    end = (partition_id + 1) * part_size if partition_id < num_partitions - 1 else n
+    X_part = X[start:end]
+    y_part = y[start:end]
+
+    split = int(0.8 * len(X_part))
+    X_train, X_test = X_part[:split], X_part[split:]
+    y_train, y_test = y_part[:split], y_part[split:]
+
+    trainloader = DataLoader(TensorDataset(X_train, y_train), batch_size=batch_size, shuffle=True)
+    testloader = DataLoader(TensorDataset(X_test, y_test), batch_size=batch_size, shuffle=False)
+
     return trainloader, testloader
 
-
-def load_centralized_dataset(batch_size=128):
-    global har_data
-    if har_data is None:
-        har_data = load_UT_HAR(DATA_DIR)
+def load_centralized_dataset(batch_size=128, root_dir=abs_path):
+    har_data = load_UT_HAR(root_dir)
     dataset = TensorDataset(har_data['X_test'], har_data['y_test'])
     return DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
 
-def train(net, trainloader, device, epochs=3, lr=1e-3):
+def train(net, trainloader, device, epochs=5, lr=1e-3):
     net.to(device)
     criterion = torch.nn.CrossEntropyLoss().to(device)
     optimizer = torch.optim.Adam(net.parameters(), lr=lr)

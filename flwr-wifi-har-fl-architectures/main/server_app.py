@@ -18,6 +18,8 @@ MODEL_DICT = {
     "densenet": DenseNetModel,
 }
 
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
 def compute_model_size_bytes(arrays: ArrayRecord) -> int:
     """Compute the model size in bytes."""
     return sum(t.numel() * t.element_size() for t in arrays.to_torch_state_dict().values())
@@ -68,8 +70,7 @@ def global_evaluate(server_round: int, arrays: ArrayRecord, model: torch.nn.Modu
 
     # Load the model and initialize it with the received weights
     model.load_state_dict(arrays.to_torch_state_dict())
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    model.to(device)
+    # model.to(device)
 
     # Load entire test set
     test_dataloader = load_centralized_dataset()
@@ -79,3 +80,26 @@ def global_evaluate(server_round: int, arrays: ArrayRecord, model: torch.nn.Modu
 
     # Return the evaluation metrics
     return MetricRecord({"accuracy": test_acc, "loss": test_loss})
+
+# Simulation code (for analysis.ipynb)
+# Create FedAvg strategy
+# strategy = FedAvg(
+#     fraction_fit=1.0,  # Sample 100% of available clients for training
+#     fraction_evaluate=0.5,  # Sample 50% of available clients for evaluation
+#     min_fit_clients=10,  # Never sample less than 10 clients for training
+#     min_evaluate_clients=5,  # Never sample less than 5 clients for evaluation
+#     min_available_clients=10,  # Wait until all 10 clients are available
+# )
+
+# def server_fn(context: Context) -> ServerAppComponents:
+#     """Construct components that set the ServerApp behaviour.
+
+#     You can use the settings in `context.run_config` to parameterize the
+#     construction of all elements (e.g the strategy or the number of rounds)
+#     wrapped in the returned ServerAppComponents object.
+#     """
+
+#     # Configure the server for 5 rounds of training
+#     config = ServerConfig(num_rounds=5)
+
+#     return ServerAppComponents(strategy=strategy, config=config)
