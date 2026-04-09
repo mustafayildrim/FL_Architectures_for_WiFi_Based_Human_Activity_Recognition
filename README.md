@@ -21,7 +21,7 @@ The project is motivated by the lack of controlled comparisons between centraliz
 
 **UT-HAR** is a WiFi CSI-based human activity recognition dataset.
 
-**Dataset source:** [WiFi-CSI-Sensing-Benchmark](https://github.com/xyanchen/WiFi-CSI-Sensing-Benchmark?tab=readme-ov-file#download-processed-datak)
+**Dataset source:** [WiFi-CSI-Sensing-Benchmark](https://github.com/xyanchen/WiFi-CSI-Sensing-Benchmark?tab=readme-ov-file#download-processed-data)
 
 | Property | Value |
 |---|---|
